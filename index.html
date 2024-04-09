@@ -12,9 +12,13 @@
         lastvid = null;
         lastcb = null;
         function request_video_frame_callback(vid, cb) {
-            vid.requestVideoFrameCallback(cb);
-            lastvid = vid;
-            lastcb = cb;
+            try {
+                vid.requestVideoFrameCallback(cb);
+                lastvid = vid;
+                lastcb = cb;
+            } catch {
+                console.log("requestVideoFrameCallback seems unavailable");
+            }
         }
 
         function request_video_frame_callback_again() {

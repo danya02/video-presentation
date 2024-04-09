@@ -1,11 +1,12 @@
 use std::time::Duration;
 
 use shadow_clone::shadow_clone;
-use wasm_bindgen::{closure::Closure, JsValue};
+use wasm_bindgen::{closure::Closure, convert::IntoWasmAbi, JsValue};
 use web_sys::wasm_bindgen::JsCast;
 use web_sys::HtmlVideoElement;
 use webvtt::{Block, Cue};
 use yew::prelude::*;
+use yew_hooks::{use_interval, use_is_first_mount, use_state_ptr_eq};
 
 #[function_component]
 fn App() -> Html {
@@ -16,6 +17,7 @@ fn App() -> Html {
     let current_rate = use_state(|| 1.0);
     let high_res_callback = use_state(|| None);
     let video_el = use_node_ref();
+    let deadline_block_idx = use_state(|| 0usize);
 
     fn b2c(b: &Block) -> &Cue {
         match b {
@@ -36,7 +38,13 @@ fn App() -> Html {
     });
 
     let ontimeupdate = Callback::from({
-        shadow_clone!(current_time, current_block, subs, video_el);
+        shadow_clone!(
+            current_time,
+            current_block,
+            subs,
+            video_el,
+            deadline_block_idx
+        );
         move |ev: Event| {
             let subs = &*subs;
             let element: HtmlVideoElement;
@@ -70,8 +78,58 @@ fn App() -> Html {
             }
 
             current_block.set((current_block_idx, current_block_is_visible));
+
+            // Set the playback rate based on the time left until the end of the deadline block.
+            let deadline_block = b2c(&sub_list[*deadline_block_idx]);
+            let time_until_end = deadline_block.end.checked_sub(now).unwrap_or_default();
+
+            let rate_fn = |time: Duration| {
+                let time_s = time.as_secs_f64();
+                let k = 2.0;
+                2.0 * (1.0 / (1.0 + std::f64::consts::E.powf(-k * time_s)) - 0.5)
+            };
+            element.set_playback_rate(rate_fn(time_until_end));
         }
     });
+
+    let advance_deadline_block = {
+        shadow_clone!(deadline_block_idx);
+        Callback::from(move |ev: MouseEvent| {
+            log::info!("Advancing deadline block idx: was {}", *deadline_block_idx);
+            deadline_block_idx.set(*deadline_block_idx + 1);
+            ev.prevent_default();
+        })
+    };
+
+    use_interval(
+        {
+            shadow_clone!(ontimeupdate);
+            move || ontimeupdate.emit(Event::new("none").unwrap())
+        },
+        100,
+    );
+
+    let is_first = use_is_first_mount();
+    let global_keydown_handler = use_state_ptr_eq(|| None);
+    if is_first {
+        let window = web_sys::window().unwrap();
+        let listener = gloo::events::EventListener::new(&window, "keydown", {
+            shadow_clone!(advance_deadline_block);
+            move |e| {
+                let e: KeyboardEvent = (e.clone()).dyn_into().unwrap();
+                let keycode = e.key_code();
+                log::info!("Pressed key {keycode}");
+                if keycode == 33 {
+                    // page up (prev)
+                } else if keycode == 34 {
+                    // page down (next)
+                    log::info!("Sending advance event");
+                    advance_deadline_block.emit(MouseEvent::new("none").unwrap());
+                }
+            }
+        });
+        global_keydown_handler.set(Some(listener));
+    }
 
     if high_res_callback.is_none() {
         #[wasm_bindgen::prelude::wasm_bindgen]
@@ -116,7 +174,7 @@ fn App() -> Html {
 
     html! {
         <div class="container">
-            <video src="/media/vid.webm" controls={true} ref={video_el}
+            <video src="/media/vid.webm" controls={true} ref={video_el} muted={true}
             {ontimeupdate} {onplay} {onpause} {onratechange}
             style="width: 100%;"/>
 
@@ -126,6 +184,7 @@ fn App() -> Html {
             <p>{"Is playing: "}{*is_playing}</p>
             <p>{"Current block: "}{format!("{:?}", &(subs.blocks[(*current_block).0]))}</p>
             <p>{"Current block is visible: "}{(*current_block).1}</p>
+            <button class="btn btn-success" onclick={advance_deadline_block}>{"Advance deadline..."}</button>
         </div>
     }
 }

@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+gloo = "0.11.0"
 log = "0.4.21"
 shadow-clone = "1.2.1"
 wasm-bindgen = "0.2.92"
@@ -13,3 +14,4 @@ wasm-logger = "0.2.0"
 web-sys = { version = "0.3.69", features = ["HtmlVideoElement"] }
 webvtt = "0.2.0"
 yew = { version = "0.21.0", features = ["csr"] }
+yew-hooks = "0.3.1"
