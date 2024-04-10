@@ -6,6 +6,7 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bezier-rs = "0.4.0"
 gloo = "0.11.0"
 log = "0.4.21"
 shadow-clone = "1.2.1"

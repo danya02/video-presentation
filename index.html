@@ -24,6 +24,20 @@
         function request_video_frame_callback_again() {
             lastvid.requestVideoFrameCallback(lastcb);
         }
+
+        function try_set_playback_rate(el, rate) {
+            try {
+                el.playbackRate = rate;
+                return true;
+            } catch (e) {
+                console.error("Error setting playback rate: ", e);
+                return false;
+            }
+        }
+
+        function unixtime() {
+            return (+Date.now()) / 1000
+        }
     </script>
 </head>
 
