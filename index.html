@@ -12,6 +12,12 @@
         lastvid = null;
         lastcb = null;
         function request_video_frame_callback(vid, cb) {
+            const urlParams = new URLSearchParams(window.location.search);
+            const myParam = urlParams.get('slow');
+            if (myParam) {
+                console.log("Asked to use slow method");
+                return
+            }
             try {
                 vid.requestVideoFrameCallback(cb);
                 lastvid = vid;

@@ -75,7 +75,7 @@ impl Component for App {
 
         html! {
             <div class="container">
-                <video src="/media/vid.webm" controls={true} ref={self.video_el.clone()} muted={true}
+                <video src="/media/vid.mp4" controls={true} ref={self.video_el.clone()} muted={true}
                 {ontimeupdate} {onplay} {onpause} {onratechange}
                 style="width: 100%;"/>
 
@@ -85,6 +85,7 @@ impl Component for App {
                 <p>{"Is playing: "}{self.is_playing}</p>
                 <p>{"Current block: "}{format!("{:?}", &(self.subs.blocks[self.current_block]))}</p>
                 <p>{"Current block is visible: "}{self.current_block_has_passed}</p>
+                <p>{"Deadline block: "}{format!("{:?}", &(self.subs.blocks[self.deadline_block_idx]))}</p>
                 <p>{"Duration history: "}{format!("{:?}", self.block_timing_history)}</p>
                 <button class="btn btn-success" onclick={advance_deadline_block}>{"Advance deadline..."}</button>
             </div>
@@ -169,7 +170,7 @@ impl Component for App {
 
             let el = self.video_el.cast::<HtmlVideoElement>().unwrap();
             let periodic = ctx.link().callback(|_| Msg::Periodic);
-            let cb = Closure::new(move |now, metadata| {
+            let cb = Closure::new(move |_now, _metadata| {
                 periodic.emit(());
                 request_video_frame_callback_again();
             });
@@ -216,33 +217,45 @@ impl App {
         // Set the playback rate based on the time left until the end of the deadline block.
         let deadline_block = b2c(&sub_list[self.deadline_block_idx]);
         let time_until_end = deadline_block.end.checked_sub(now).unwrap_or_default();
-        let near_curve =
-            bezier_rs::Bezier::from_cubic_coordinates(0.0, 0.0, 0.0, 0.25, 1.0, 0.0, 1.0, 1.0);
-        let far_curve =
-            bezier_rs::Bezier::from_cubic_coordinates(1.0, 1.0, 1.6, 1.0, 2.0, 1.5, 2.0, 2.0);
+        // let near_curve =
+        //     bezier_rs::Bezier::from_cubic_coordinates(0.0, 0.0, 0.0, 0.25, 1.0, 0.0, 1.0, 1.0);
+        // let far_curve =
+        //     bezier_rs::Bezier::from_cubic_coordinates(1.0, 1.0, 1.6, 1.0, 2.0, 1.5, 2.0, 2.0);
 
         let rate_fn = |time: Duration| {
             let time_s = time.as_secs_f64();
             let deadline_block_duration = (deadline_block.end - deadline_block.start).as_secs_f64();
             let x = time_s / deadline_block_duration;
-            let advanced_rate = |x, target_rate| {
-                let k = 5.0;
-                2.0 * target_rate * (1.0 / (1.0 + std::f64::consts::E.powf(-k * x)) - 0.5)
-            };
+            // let advanced_rate = |x: f64, target_rate: f64| {
+            //     let k = 5.0;
+            //     2.0 * target_rate * (1.0 / (1.0 + std::f64::consts::E.powf(-k * x)) - 0.5)
+            // };
 
             // If the current block on the screen is not the current deadline block, we seek fast to it.
             if self.current_block != self.deadline_block_idx {
                 return 2.0 * (time_s / deadline_block_duration) * self.target_rate;
             }
 
-            if x > 1.0 {
-                far_curve
-                    .evaluate(bezier_rs::TValue::Parametric((x - 1.0).min(1.0)))
-                    .y
-                    * self.target_rate
+            let slow_threshold = 0.2;
+
+            // If we're past the deadline, stop entirely.
+            if x < 0.0 {
+                0.0
+            } else if x > slow_threshold {
+                self.target_rate
             } else {
-                advanced_rate(x, self.target_rate)
+                // We're in the zone where we need to start slowing down.
+                self.target_rate * (x / slow_threshold)
             }
+
+            // if x > 1.0 {
+            //     far_curve
+            //         .evaluate(bezier_rs::TValue::Parametric((x - 1.0).min(1.0)))
+            //         .y
+            //         * self.target_rate
+            // } else {
+            //     advanced_rate(x, self.target_rate)
+            // }
 
             // if x > 1.0 {
             //     return x * advanced_rate(2.0, 1.0);
