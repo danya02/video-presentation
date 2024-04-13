@@ -12,11 +12,9 @@
         lastvid = null;
         lastcb = null;
         function request_video_frame_callback(vid, cb) {
-            const urlParams = new URLSearchParams(window.location.search);
-            const myParam = urlParams.get('slow');
-            if (myParam) {
+            if (window.location.hash.search("slow") >= 0) {
                 console.log("Asked to use slow method");
-                return
+                return;
             }
             try {
                 vid.requestVideoFrameCallback(cb);
@@ -43,6 +41,10 @@
 
         function unixtime() {
             return (+Date.now()) / 1000
+        }
+
+        function post_message(data) {
+            window.opener.postMessage(data)
         }
     </script>
 </head>

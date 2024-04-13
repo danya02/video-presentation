@@ -1,11 +1,14 @@
 use std::time::Duration;
 
+use aux::AuxApp;
 use gloo::{events::EventListener, timers::callback::Interval};
 use wasm_bindgen::prelude::*;
-use web_sys::HtmlVideoElement;
 use web_sys::{js_sys::wasm_bindgen, wasm_bindgen::JsCast};
+use web_sys::{HtmlVideoElement, MessageEvent, Window};
 use webvtt::{Block, Cue};
 use yew::prelude::*;
+
+mod aux;
 
 struct App {
     subs: webvtt::File,
@@ -18,6 +21,8 @@ struct App {
     video_el: NodeRef,
     deadline_block_idx: usize,
     global_keydown_listener: Option<EventListener>,
+    global_message_listener: Option<EventListener>,
+    child_window: Option<Window>,
     interval_callback: Option<Interval>,
     block_timing_history: Vec<f64>,
     current_block_started_at: f64,
@@ -34,6 +39,7 @@ enum Msg {
     Playing(bool),
     RateChange,
     NextDeadline,
+    NewWindow(Window),
 }
 
 impl Component for App {
@@ -56,6 +62,8 @@ impl Component for App {
             video_el: NodeRef::default(),
             deadline_block_idx: 0,
             global_keydown_listener: None,
+            global_message_listener: None,
+            child_window: None,
             interval_callback: None,
             current_block_started_at: 0.0,
             block_timing_history: vec![],
@@ -73,6 +81,23 @@ impl Component for App {
             Msg::NextDeadline
         });
 
+        let open_aux_window = {
+            let cb = ctx.link().callback(|w| Msg::NewWindow(w));
+            Callback::from(move |ev: MouseEvent| {
+                ev.prevent_default();
+                let window = gloo::utils::window();
+                let child = window
+                    .open_with_url_and_target_and_features(
+                        &(window.location().href().unwrap() + "#thisisauxwindow"),
+                        "presentationAuxWindow",
+                        "popup,width=100,height=100",
+                    )
+                    .unwrap_throw()
+                    .unwrap_throw();
+                cb.emit(child);
+            })
+        };
+
         html! {
             <div class="container">
                 <video src="/media/vid.mp4" controls={true} ref={self.video_el.clone()} muted={true}
@@ -88,6 +113,7 @@ impl Component for App {
                 <p>{"Deadline block: "}{format!("{:?}", &(self.subs.blocks[self.deadline_block_idx]))}</p>
                 <p>{"Duration history: "}{format!("{:?}", self.block_timing_history)}</p>
                 <button class="btn btn-success" onclick={advance_deadline_block}>{"Advance deadline..."}</button>
+                <button class="btn btn-primary" onclick={open_aux_window}>{"Open Aux Window"}</button>
             </div>
         }
     }
@@ -125,6 +151,9 @@ impl Component for App {
                 self.target_rate = self.block_timing_history.iter().cloned().sum::<f64>()
                     / self.block_timing_history.len() as f64;
             }
+            Msg::NewWindow(w) => {
+                self.child_window = Some(w);
+            }
         }
         true
     }
@@ -150,6 +179,15 @@ impl Component for App {
                 }
             });
             self.global_keydown_listener = Some(listener);
+
+            // Also set up the global message listener
+            let listener = EventListener::new(&window, "message", {
+                move |e| {
+                    let e: MessageEvent = (e.clone()).dyn_into().unwrap();
+                    log::info!("Received message with: {:?}", e.data().as_string());
+                }
+            });
+            self.global_message_listener = Some(listener);
 
             // Also set up the global interval
             let periodic = ctx.link().callback(|_| Msg::Periodic);
@@ -184,6 +222,18 @@ impl Component for App {
 }
 
 impl App {
+    fn send_to_child(&self, what: impl Into<JsValue>) {
+        if let Some(ref w) = self.child_window {
+            let origin = gloo::utils::window().origin();
+            if let Err(why) = w.post_message(&what.into(), &origin) {
+                log::error!(
+                    "Error while sending value into child window: {:?}",
+                    why.as_string()
+                );
+            }
+        }
+    }
+
     fn periodic(&mut self) {
         let element: HtmlVideoElement;
         if let Some(v) = self.video_el.get() {
@@ -193,6 +243,7 @@ impl App {
         }
         let now = Duration::from_secs_f64(element.current_time());
         self.current_time = now;
+        self.send_to_child(self.current_time.as_secs_f64());
 
         let sub_list = &self.subs.blocks;
 
@@ -291,5 +342,14 @@ fn fits(time: Duration, cue: &Cue) -> bool {
 
 fn main() {
     wasm_logger::init(wasm_logger::Config::default());
-    yew::Renderer::<App>::new().render();
+    if gloo::utils::window()
+        .location()
+        .hash()
+        .unwrap()
+        .contains("thisisauxwindow")
+    {
+        yew::Renderer::<AuxApp>::new().render();
+    } else {
+        yew::Renderer::<App>::new().render();
+    }
 }
