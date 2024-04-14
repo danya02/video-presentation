@@ -9,6 +9,8 @@ edition = "2021"
 bezier-rs = "0.4.0"
 gloo = "0.11.0"
 log = "0.4.21"
+serde = { version = "1.0.197", features = ["derive"] }
+serde-wasm-bindgen = "0.6.5"
 shadow-clone = "1.2.1"
 wasm-bindgen = "0.2.92"
 wasm-logger = "0.2.0"

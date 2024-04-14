@@ -1,6 +1,7 @@
 use std::time::Duration;
 
-use aux::AuxApp;
+use aux::{AuxApp, AuxToMainInterop, MainToAuxInterop};
+use gloo::utils::format::JsValueSerdeExt;
 use gloo::{events::EventListener, timers::callback::Interval};
 use wasm_bindgen::prelude::*;
 use web_sys::{js_sys::wasm_bindgen, wasm_bindgen::JsCast};
@@ -8,8 +9,10 @@ use web_sys::{HtmlVideoElement, MessageEvent, Window};
 use webvtt::{Block, Cue};
 use yew::prelude::*;
 
-mod aux;
+use crate::aux::CueContext;
 
+mod aux;
+mod common;
 struct App {
     subs: webvtt::File,
     current_block: usize,
@@ -40,6 +43,7 @@ enum Msg {
     RateChange,
     NextDeadline,
     NewWindow(Window),
+    ReceivedFromChild(AuxToMainInterop),
 }
 
 impl Component for App {
@@ -48,7 +52,10 @@ impl Component for App {
     type Properties = ();
 
     fn create(_ctx: &Context<Self>) -> Self {
-        let text = include_str!("../media/subs-verbose.vtt");
+        let mut text = include_str!("../media/subs-verbose-de.vtt");
+        if text.chars().next().unwrap() == char::from_u32(0xfeff).unwrap() {
+            text = &text[3..];
+        }
         // log::info!("{text}");
         let subs = webvtt::parse_file(text).unwrap();
         Self {
@@ -90,7 +97,7 @@ impl Component for App {
                     .open_with_url_and_target_and_features(
                         &(window.location().href().unwrap() + "#thisisauxwindow"),
                         "presentationAuxWindow",
-                        "popup,width=100,height=100",
+                        "popup,width=500,height=500",
                     )
                     .unwrap_throw()
                     .unwrap_throw();
@@ -99,7 +106,7 @@ impl Component for App {
         };
 
         html! {
-            <div class="container">
+            <div class="">
                 <video src="/media/vid.mp4" controls={true} ref={self.video_el.clone()} muted={true}
                 {ontimeupdate} {onplay} {onpause} {onratechange}
                 style="width: 100%;"/>
@@ -118,7 +125,7 @@ impl Component for App {
         }
     }
 
-    fn update(&mut self, _ctx: &Context<Self>, msg: Self::Message) -> bool {
+    fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
         match msg {
             Msg::Periodic => {
                 self.periodic();
@@ -154,6 +161,30 @@ impl Component for App {
             Msg::NewWindow(w) => {
                 self.child_window = Some(w);
             }
+            Msg::ReceivedFromChild(value) => match value {
+                AuxToMainInterop::AdvanceDeadline => ctx.link().send_message(Msg::NextDeadline),
+                AuxToMainInterop::SetIsPlaying(value) => {
+                    let vid: HtmlVideoElement = match self.video_el.cast::<HtmlVideoElement>() {
+                        Some(v) => v,
+                        None => return false,
+                    };
+                    match value {
+                        true => {
+                            let _ = vid.play();
+                        }
+                        false => {
+                            let _ = vid.pause();
+                        }
+                    }
+                }
+                AuxToMainInterop::ResetRate => {
+                    self.target_rate = 1.0;
+                    match self.video_el.cast::<HtmlVideoElement>() {
+                        Some(v) => v.set_playback_rate(1.0),
+                        None => return false,
+                    };
+                }
+            },
         }
         true
     }
@@ -161,30 +192,22 @@ impl Component for App {
     fn rendered(&mut self, ctx: &Context<Self>, first_render: bool) {
         if first_render {
             // Here we'll set up the global event listener
-            let advance_deadline_block = ctx.link().callback(|_| Msg::NextDeadline);
-
             let window = web_sys::window().unwrap();
             let listener = EventListener::new(&window, "keydown", {
-                move |e| {
-                    let e: KeyboardEvent = (e.clone()).dyn_into().unwrap();
-                    let keycode = e.key_code();
-                    log::info!("Pressed key {keycode}");
-                    if keycode == 33 {
-                        // page up (prev)
-                    } else if keycode == 34 {
-                        // page down (next)
-                        log::info!("Sending advance event");
-                        advance_deadline_block.emit(());
-                    }
-                }
+                common::event_handler(ctx.link().callback(Msg::ReceivedFromChild))
             });
             self.global_keydown_listener = Some(listener);
 
             // Also set up the global message listener
             let listener = EventListener::new(&window, "message", {
+                let cb = ctx
+                    .link()
+                    .callback(move |data| Msg::ReceivedFromChild(data));
                 move |e| {
                     let e: MessageEvent = (e.clone()).dyn_into().unwrap();
-                    log::info!("Received message with: {:?}", e.data().as_string());
+                    let data: AuxToMainInterop = e.data().into_serde().unwrap_throw();
+                    log::info!("Received message with: {data:?}");
+                    cb.emit(data);
                 }
             });
             self.global_message_listener = Some(listener);
@@ -222,10 +245,10 @@ impl Component for App {
 }
 
 impl App {
-    fn send_to_child(&self, what: impl Into<JsValue>) {
+    fn send_to_child(&self, what: MainToAuxInterop) {
         if let Some(ref w) = self.child_window {
             let origin = gloo::utils::window().origin();
-            if let Err(why) = w.post_message(&what.into(), &origin) {
+            if let Err(why) = w.post_message(&JsValue::from_serde(&what).unwrap(), &origin) {
                 log::error!(
                     "Error while sending value into child window: {:?}",
                     why.as_string()
@@ -243,7 +266,35 @@ impl App {
         }
         let now = Duration::from_secs_f64(element.current_time());
         self.current_time = now;
-        self.send_to_child(self.current_time.as_secs_f64());
+        self.send_to_child(MainToAuxInterop::CurrentStatus {
+            time: element.current_time(),
+            rate: element.playback_rate(),
+            playing: !element.paused(),
+        });
+
+        // Send the context
+        let mut prev = vec![];
+        let mut next = vec![];
+        for i in (self.deadline_block_idx as isize) - 2..self.deadline_block_idx as isize {
+            if i < 0 {
+                continue;
+            }
+            prev.push(b2c(&self.subs.blocks[i as usize]).text.clone())
+        }
+        for i in (self.deadline_block_idx as isize + 1)..(self.deadline_block_idx as isize + 5) {
+            if i as usize >= self.subs.blocks.len() {
+                continue;
+            }
+            next.push(b2c(&self.subs.blocks[i as usize]).text.clone())
+        }
+        let ctx = CueContext {
+            current_idx: self.deadline_block_idx as i32,
+            current: b2c(&self.subs.blocks[self.deadline_block_idx]).text.clone(),
+            prev,
+            next,
+        };
+
+        self.send_to_child(MainToAuxInterop::CueContext(ctx));
 
         let sub_list = &self.subs.blocks;
 
