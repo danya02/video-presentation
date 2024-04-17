@@ -73,6 +73,10 @@ impl Component for AuxApp {
             ev.prevent_default();
             AuxAppMsg::WantingToSend(AuxToMainInterop::SetIsPlaying(false))
         });
+        let do_reset = ctx.link().callback(|ev: MouseEvent| {
+            ev.prevent_default();
+            AuxAppMsg::WantingToSend(AuxToMainInterop::ResetRate)
+        });
 
         let cues_prev = self
             .context
@@ -96,6 +100,7 @@ impl Component for AuxApp {
                 <button class="btn btn-success" onclick={next_deadline}>{"Next"}</button>
                 <button class="btn btn-primary" onclick={do_play}>{"Play"}</button>
                 <button class="btn btn-warning" onclick={do_pause}>{"Pause"}</button>
+                <button class="btn btn-outline-danger" onclick={do_reset}>{"Reset rate"}</button>
                 <div>{cues_prev}</div>
                 <p class="text-danger">{&self.context.current}</p>
                 <div>{cues_next}</div>

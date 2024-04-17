@@ -105,18 +105,23 @@ impl Component for App {
             })
         };
 
+        let current_block_style = if self.current_block_has_passed {
+            "badge rounded-pill text-bg-success"
+        } else {
+            "badge rounded-pill text-bg-danger"
+        };
         html! {
             <div class="">
-                <video src="/media/vid.mp4" controls={true} ref={self.video_el.clone()} muted={true}
+                <video src="/media/vid-rendered.mp4" controls={true} ref={self.video_el.clone()} muted={true}
                 {ontimeupdate} {onplay} {onpause} {onratechange}
                 style="width: 100%;"/>
 
                 <hr />
-                <p>{"Current time: "}{format!("{:?}", self.current_time)}</p>
-                <p>{"Current playback rate: "}{self.current_rate}</p>
-                <p>{"Is playing: "}{self.is_playing}</p>
-                <p>{"Current block: "}{format!("{:?}", &(self.subs.blocks[self.current_block]))}</p>
-                <p>{"Current block is visible: "}{self.current_block_has_passed}</p>
+                <h1>
+                    <span class="badge rounded-pill text-bg-primary">{format!("{:?}", self.current_time)}</span>
+                    <span class="badge rounded-pill text-bg-secondary">{self.current_rate}{"sec./sec."}</span>
+                    <span class={current_block_style}>{self.current_block}{"→"}{self.deadline_block_idx}</span>
+                </h1>
                 <p>{"Deadline block: "}{format!("{:?}", &(self.subs.blocks[self.deadline_block_idx]))}</p>
                 <p>{"Duration history: "}{format!("{:?}", self.block_timing_history)}</p>
                 <button class="btn btn-success" onclick={advance_deadline_block}>{"Advance deadline..."}</button>
@@ -183,6 +188,7 @@ impl Component for App {
                         Some(v) => v.set_playback_rate(1.0),
                         None => return false,
                     };
+                    self.block_timing_history.clear();
                 }
             },
         }
@@ -338,7 +344,7 @@ impl App {
                 return 2.0 * (time_s / deadline_block_duration) * self.target_rate;
             }
 
-            let slow_threshold = 0.2;
+            let slow_threshold = 0.1;
 
             // If we're past the deadline, stop entirely.
             if x < 0.0 {
